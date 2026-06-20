@@ -409,4 +409,229 @@ $('startBtn').onclick=start;$('prevBtn').onclick=()=>{if(state.current>0){state.
   renderVariants();
 })();
 </script>
+
+<script>
+/* Russian theory/formula/solution add-on.
+   Load this script LAST, after all quiz banks and official-key patches. */
+(function () {
+  "use strict";
+
+  if (
+    typeof VARIANTS === "undefined" ||
+    typeof EXPLANATIONS === "undefined" ||
+    typeof activeKey !== "function"
+  ) {
+    throw new Error("Theory/solution patch must be loaded after the main quiz and all modules.");
+  }
+
+  const setup = document.getElementById("setup");
+
+  /* Remove the visible key block and replace it with learning instructions. */
+  if (setup) {
+    const fields = Array.from(setup.querySelectorAll(".field"));
+    const keyField = fields.find(el => el.textContent.includes("Ключ проверки"));
+
+    if (keyField) {
+      const learningField = document.createElement("div");
+      learningField.className = "field";
+      learningField.innerHTML = `
+        <span class="label">Разбор ответа</span>
+        <div class="solution-intro">
+          <b>Теория + формула + пошаговое решение</b>
+          <div class="note" style="margin-top:6px">
+            В режиме «Обучение» разбор появляется сразу после ответа.
+            В режиме «Экзамен» он показывается после завершения попытки.
+          </div>
+        </div>`;
+      keyField.replaceWith(learningField);
+    }
+
+    const notice = Array.from(setup.querySelectorAll(".notice"))
+      .find(el => el.textContent.includes("Проверка:"));
+
+    if (notice) {
+      notice.innerHTML =
+        "<b>Алгоритм работы:</b> определите тему вопроса → выпишите нужную формулу " +
+        "→ подставьте данные → сравните результат с вариантами ответа.";
+    }
+  }
+
+  const practiceOption = document.querySelector('#mode option[value="practice"]');
+  const examOption = document.querySelector('#mode option[value="exam"]');
+  if (practiceOption) {
+    practiceOption.textContent = "Обучение — сразу показывать формулу и решение";
+  }
+  if (examOption) {
+    examOption.textContent = "Экзамен — показать полный разбор после завершения";
+  }
+
+  const style = document.createElement("style");
+  style.textContent = `
+    .solution-intro{
+      padding:12px 14px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#f7f9ff;
+    }
+    .guide{
+      border-left:4px solid var(--accent);
+      background:#f7f9ff;
+      padding:14px 16px;
+    }
+    .guide-title{
+      display:block;
+      margin-bottom:8px;
+      font-size:15px;
+    }
+    .guide-method{
+      margin:0 0 10px;
+      padding:9px 11px;
+      border-radius:8px;
+      background:#eef2ff;
+      color:#344054;
+      font-size:13px;
+    }
+    .guide-warning{
+      margin-top:10px;
+      padding:9px 11px;
+      border-radius:8px;
+      background:#fff8e8;
+      color:#7a4b00;
+      font-size:13px;
+    }
+  `;
+  document.head.appendChild(style);
+
+  function explanationBlock(q, key) {
+    const explanation = EXPLANATIONS[q.type] || "";
+    const typeName =
+      (typeof TYPE_NAMES !== "undefined" && TYPE_NAMES[q.type])
+        ? TYPE_NAMES[q.type]
+        : "статистическая задача";
+
+    const mismatch =
+      q._officialGuide !== true &&
+      q._contentAnswer &&
+      key !== "Z" &&
+      q._contentAnswer !== key;
+
+    const body = explanation ||
+      `Определите, к какой теме относится вопрос («${typeName}»), ` +
+      `выпишите соответствующую формулу и последовательно подставьте данные.`;
+
+    const warning = mismatch
+      ? `<div class="guide-warning"><b>Важно:</b> приведён стандартный теоретический разбор.
+         В исходном ключе преподавателя отмечен другой вариант ответа; при подсчёте баллов
+         тренажёр использует именно исходный ключ.</div>`
+      : "";
+
+    return `
+      <div class="guide">
+        <b class="guide-title">Теория, формула и решение</b>
+        <div class="guide-method">
+          <b>Как отвечать:</b> определить тип задачи → выбрать формулу →
+          выполнить вычисления → сопоставить результат с вариантами.
+        </div>
+        ${body}
+        ${warning}
+      </div>`;
+  }
+
+  /* Always show a Russian explanation in practice mode. */
+  showFeedback = function (q, sourceIndex, ans) {
+    const key = activeKey(q, sourceIndex);
+    const fb = document.getElementById("feedback");
+
+    fb.classList.remove("hidden", "good", "bad");
+
+    if (key === "Z") {
+      fb.classList.add("good");
+      fb.innerHTML =
+        `<b>Вопрос аннулирован:</b> балл засчитывается автоматически.` +
+        explanationBlock(q, key);
+    } else if (ans === key) {
+      fb.classList.add("good");
+      fb.innerHTML =
+        `<b>Верно.</b>` +
+        explanationBlock(q, key);
+    } else {
+      fb.classList.add("bad");
+      const keyHtml =
+        (q.optionsHtml && q.optionsHtml[key]) ||
+        escapeHtml(q.options[key] || "");
+
+      fb.innerHTML =
+        `<b>Неверно.</b> Правильный ответ: <b>${key}</b>) ${keyHtml}.` +
+        explanationBlock(q, key);
+    }
+
+    document.querySelectorAll(".option").forEach(el => {
+      if (el.dataset.k === key) el.classList.add("correct");
+      if (el.dataset.k === ans && ans !== key) el.classList.add("wrong");
+    });
+
+    typesetMath([fb, document.getElementById("options")]);
+  };
+
+  /* Show theory, formula and solution for every reviewed question. */
+  renderReview = function (rows, filter) {
+    const shown =
+      filter === "wrong"
+        ? rows.filter(r => !r.ok || !r.user)
+        : rows;
+
+    document.getElementById("review").innerHTML =
+      shown.map(r => {
+        const cls = r.cancel ? "cancel" : r.ok ? "good" : "bad";
+
+        const userText = r.user
+          ? `${r.user}) ${
+              (r.q.optionsHtml && r.q.optionsHtml[r.user]) ||
+              escapeHtml(r.q.options[r.user])
+            }`
+          : "нет ответа";
+
+        const keyText = r.cancel
+          ? "Z — вопрос аннулирован"
+          : `${r.key}) ${
+              (r.q.optionsHtml && r.q.optionsHtml[r.key]) ||
+              escapeHtml(r.q.options[r.key] || "")
+            }`;
+
+        return `
+          <article class="review-item ${cls}">
+            <h4>№ ${r.q.n}: ${
+              r.cancel ? "аннулирован" : r.ok ? "верно" : "ошибка"
+            }</h4>
+            <div>${r.q.qHtml || escapeHtml(r.q.q)}</div>
+            <p><b>Ваш ответ:</b> ${userText}</p>
+            <p><b>Правильный ответ:</b> ${keyText}</p>
+            ${explanationBlock(r.q, r.key)}
+          </article>`;
+      }).join("") || "<p>Ошибок и пропусков нет.</p>";
+
+    typesetMath([document.getElementById("review")]);
+  };
+
+  /* Remove key wording from the live status. */
+  updateStatus = function () {
+    const answered = Object.keys(state.answers).length;
+    document.getElementById("statusText").textContent =
+      `Отвечено: ${answered}/30`;
+    document.getElementById("progressBar").style.width =
+      (answered / 30 * 100) + "%";
+  };
+
+  /* Replace the result subtitle with a learning-oriented description. */
+  const originalShowResults = showResults;
+  showResults = function () {
+    originalShowResults();
+    const subtitle = document.getElementById("resultSubtitle");
+    if (subtitle) {
+      subtitle.textContent =
+        "Ниже для каждого вопроса показаны правильный ответ, теория, формула и способ решения.";
+    }
+  };
+})();
+</script>
 </body></html>
